@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 from typing import List, Optional, Dict, Any
+import time
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .clients.lmstudio import LMStudioEmbeddings, LMStudioChat
@@ -12,9 +14,26 @@ from .ingest import Ingestor
 from .retrieval import Retriever
 from .settings import get_settings
 from .vector_store import ChromaStore
+from .event_log import JSONLLogger
+from .logging_config import configure_logging
+from .event_bus import EventBus
 
 
+configure_logging()
 app = FastAPI(title="Local LLM + RAG API", version="0.1.0")
+
+# CORS for local UI
+s = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[s.UI_ORIGIN],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global in-process event bus for ingest events
+event_bus = EventBus()
 
 
 class QueryRequest(BaseModel):
@@ -83,14 +102,24 @@ async def ingest(req: IngestRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"PDF_SOURCE_DIR not found: {settings.PDF_SOURCE_DIR}")
     store = _store()
     emb, _ = _lm_clients()
-    ingestor = Ingestor(store=store, embedder=emb)
+    ingest_logger = JSONLLogger(settings.INGEST_LOG_PATH)
+    ingestor = Ingestor(store=store, embedder=emb, ingest_logger=ingest_logger, event_bus=event_bus)
     result = await ingestor.ingest_paths(paths=req.paths)
     return {
         "files_processed": result.files_processed,
         "pages_processed": result.pages_processed,
         "chunks_upserted": result.chunks_upserted,
         "errors": result.errors,
+        "ocr_events": result.ocr_events,
     }
+
+
+@app.get("/logs/ingest")
+async def ingest_logs(limit: int = 200) -> Dict[str, Any]:
+    settings = get_settings()
+    logger = JSONLLogger(settings.INGEST_LOG_PATH)
+    records = logger.tail(limit=limit)
+    return {"items": records, "count": len(records)}
 
 
 @app.post("/query")
@@ -100,8 +129,33 @@ async def query(req: QueryRequest) -> Dict[str, Any]:
     emb, chat = _lm_clients()
     retriever = Retriever(store=store, embedder=emb, chat=chat)
     top_k = req.top_k or settings.TOP_K
-    result = await retriever.query(query=req.query, top_k=top_k, similarity_threshold=settings.SIMILARITY_THRESHOLD)
-    return result
+    t0 = time.perf_counter()
+    qlog = JSONLLogger(settings.QUERY_LOG_PATH)
+    try:
+        result = await retriever.query(query=req.query, top_k=top_k, similarity_threshold=settings.SIMILARITY_THRESHOLD)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        # lightweight record
+        qlog.append({
+            "event": "query",
+            "query": req.query,
+            "top_k": top_k,
+            "chunks_retrieved": result.get("chunks_retrieved", 0),
+            "sources_used": result.get("sources_used", []),
+            "latency_ms": latency_ms,
+            "ok": True,
+        })
+        return result
+    except Exception as e:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        qlog.append({
+            "event": "query_error",
+            "query": req.query,
+            "top_k": top_k,
+            "error": str(e),
+            "latency_ms": latency_ms,
+            "ok": False,
+        })
+        raise
 
 
 @app.get("/documents")
@@ -117,3 +171,31 @@ async def documents() -> Dict[str, Any]:
     docs = [{"source_file": k, "chunks": v} for k, v in sorted(counts.items())]
     return {"documents": docs, "total_chunks": store.count()}
 
+
+@app.get("/logs/query")
+async def query_logs(limit: int = 200) -> Dict[str, Any]:
+    settings = get_settings()
+    logger = JSONLLogger(settings.QUERY_LOG_PATH)
+    records = logger.tail(limit=limit)
+    return {"items": records, "count": len(records)}
+
+
+@app.get("/events/ingest")
+async def events_ingest():
+    import json
+    import asyncio
+    from starlette.responses import StreamingResponse
+
+    async def event_stream():
+        q = await event_bus.subscribe()
+        try:
+            while True:
+                ev = await q.get()
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await event_bus.unsubscribe(q)
+
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)

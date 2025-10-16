@@ -34,7 +34,7 @@ uvicorn server.app:app --reload
 
 5. Check health: GET http://127.0.0.1:8000/health
 
-6. Ingest PDFs from `training_data`:
+6. Ingest PDFs from `training_data` (response includes `ocr_events` with which pages used VLM OCR):
 
 ```
 POST http://127.0.0.1:8000/ingest
@@ -52,6 +52,36 @@ POST http://127.0.0.1:8000/query
 
 ## Notes
 
-- OCR via VLM (OpenAI `gpt-5-mini`) is enabled by default for pages without a text layer. Ensure `OPENAI_API_KEY` is set. PaddleOCR can be added later if desired.
+- OCR via VLM (OpenAI `gpt-5-mini`) is enabled by default for pages without a text layer and for low-text pages (threshold configurable via `OCR_LOW_TEXT_THRESHOLD_CHARS`). Ensure `OPENAI_API_KEY` is set.
 - ChromaDB persists under `data/chroma`.
 - LM Studio must be running with a chat model loaded and an embedding model available at `/v1/embeddings`.
+  - On Windows: ensure “Microsoft Visual Studio 2022 Build Tools” with C++ workload is installed so `chroma-hnswlib` builds. Once installed, `pip install -r requirements.txt` will install ChromaDB and the backend will use it automatically.
+
+## Frontend (Vite + React)
+
+Dev server (default port 5174):
+
+```
+cd web
+npm install
+npm run dev
+```
+
+The app connects to the backend at `http://127.0.0.1:8000` by default. You can change the base URL in the Settings tab, or set `VITE_API_BASE` when building.
+
+Change dev port:
+
+```
+# PowerShell
+$env:VITE_PORT = '5180'; npm run dev
+
+# bash
+VITE_PORT=5180 npm run dev
+```
+If you change the port, set `UI_ORIGIN` in `.env` to match (e.g., `http://localhost:5180`) and restart the backend.
+
+
+### Logs
+- App log: `logs/app.log` (rotating)
+- Ingest events: `logs/ingest.jsonl` (JSON lines)
+- API: `GET /logs/ingest?limit=200` to fetch recent ingest events

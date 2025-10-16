@@ -7,6 +7,9 @@ from dataclasses import dataclass
 
 # Load .env once at import
 load_dotenv()
+# Disable Chroma telemetry by default to avoid noisy logs
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMA_TELEMETRY_ENABLED", "False")
 
 
 def _getenv(name: str, default: str | None = None) -> str | None:
@@ -33,10 +36,22 @@ class Settings:
     OPENAI_API_KEY: str | None = _getenv("OPENAI_API_KEY")
     VLM_MODEL_ID: str = _getenv("VLM_MODEL_ID", "gpt-5-mini") or "gpt-5-mini"
     OCR_VLM_ENABLED: bool = (_getenv("OCR_VLM_ENABLED", "true") or "true").lower() in {"1", "true", "yes", "on"}
+    OCR_LOW_TEXT_ENABLED: bool = (_getenv("OCR_LOW_TEXT_ENABLED", "true") or "true").lower() in {"1", "true", "yes", "on"}
+    OCR_LOW_TEXT_THRESHOLD_CHARS: int = int(_getenv("OCR_LOW_TEXT_THRESHOLD_CHARS", "200") or 200)
 
     # Retrieval defaults
     TOP_K: int = int(_getenv("TOP_K", "8") or 8)
     SIMILARITY_THRESHOLD: float = float(_getenv("SIMILARITY_THRESHOLD", "0.7") or 0.7)
+
+    # Logging
+    LOG_DIR: str = _getenv("LOG_DIR", "logs") or "logs"
+    LOG_LEVEL: str = _getenv("LOG_LEVEL", "INFO") or "INFO"
+    INGEST_LOG_PATH: str = _getenv("INGEST_LOG_PATH", os.path.join("logs", "ingest.jsonl")) or os.path.join("logs", "ingest.jsonl")
+    QUERY_LOG_PATH: str = _getenv("QUERY_LOG_PATH", os.path.join("logs", "query.jsonl")) or os.path.join("logs", "query.jsonl")
+    APP_LOG_PATH: str = _getenv("APP_LOG_PATH", os.path.join("logs", "app.log")) or os.path.join("logs", "app.log")
+
+    # CORS
+    UI_ORIGIN: str = _getenv("UI_ORIGIN", "http://localhost:5174") or "http://localhost:5174"
 
 
 def get_settings() -> Settings:
