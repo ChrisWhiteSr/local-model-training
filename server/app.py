@@ -96,7 +96,7 @@ async def health() -> Dict[str, Any]:
 
 
 @app.post("/ingest")
-async def ingest(req: IngestRequest) -> Dict[str, Any]:
+async def ingest(req: IngestRequest, force: bool = False) -> Dict[str, Any]:
     settings = get_settings()
     if not os.path.isdir(settings.PDF_SOURCE_DIR):
         raise HTTPException(status_code=400, detail=f"PDF_SOURCE_DIR not found: {settings.PDF_SOURCE_DIR}")
@@ -104,13 +104,22 @@ async def ingest(req: IngestRequest) -> Dict[str, Any]:
     emb, _ = _lm_clients()
     ingest_logger = JSONLLogger(settings.INGEST_LOG_PATH)
     ingestor = Ingestor(store=store, embedder=emb, ingest_logger=ingest_logger, event_bus=event_bus)
+
+    # Clear index if force=True
+    if force:
+        ingestor.clear_index()
+
     result = await ingestor.ingest_paths(paths=req.paths)
     return {
         "files_processed": result.files_processed,
+        "files_skipped": result.files_skipped,
+        "files_found": result.files_found,
         "pages_processed": result.pages_processed,
         "chunks_upserted": result.chunks_upserted,
         "errors": result.errors,
         "ocr_events": result.ocr_events,
+        "processed_list": result.processed_list,
+        "skipped_list": result.skipped_list,
     }
 
 
@@ -188,10 +197,19 @@ async def events_ingest():
 
     async def event_stream():
         q = await event_bus.subscribe()
+        last_heartbeat = asyncio.get_event_loop().time()
         try:
             while True:
-                ev = await q.get()
-                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=5.0)
+                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                    last_heartbeat = asyncio.get_event_loop().time()
+                except asyncio.TimeoutError:
+                    # Send heartbeat every 5s if no events
+                    now = asyncio.get_event_loop().time()
+                    if now - last_heartbeat >= 5.0:
+                        yield f"data: {json.dumps({'event': 'heartbeat'}, ensure_ascii=False)}\n\n"
+                        last_heartbeat = now
         except asyncio.CancelledError:
             pass
         finally:

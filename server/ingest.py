@@ -74,6 +74,10 @@ class IngestResult:
     chunks_upserted: int
     errors: List[Dict[str, Any]]
     ocr_events: List[Dict[str, Any]]
+    files_skipped: int
+    files_found: int
+    skipped_list: List[str]
+    processed_list: List[str]
 
 
 class Ingestor:
@@ -102,6 +106,12 @@ class Ingestor:
         with open(self.index_path, "w", encoding="utf-8") as f:
             json.dump(self._index, f, indent=2)
 
+    def clear_index(self) -> None:
+        """Clear checksum index to force full re-ingestion."""
+        self._index = {}
+        self._save_index()
+        self.log.info("Checksum index cleared (force re-ingest)")
+
     async def ingest_paths(self, paths: List[str] | None = None) -> IngestResult:
         settings = get_settings()
         base_dir = settings.PDF_SOURCE_DIR
@@ -110,6 +120,9 @@ class Ingestor:
         pages_processed = 0
         chunks_upserted = 0
         ocr_events: List[Dict[str, Any]] = []
+        files_skipped = 0
+        skipped_list: List[str] = []
+        processed_list: List[str] = []
 
         # Resolve target files
         target_files: List[str] = []
@@ -125,6 +138,7 @@ class Ingestor:
                         target_files.append(os.path.join(root, fn))
 
         # Signal run start
+        self.log.info(f"Ingest run starting: {len(target_files)} files found in {base_dir}")
         if self.event_bus:
             await self.event_bus.publish({"event": "ingest_run_start", "count_files": len(target_files)})
 
@@ -133,10 +147,14 @@ class Ingestor:
                 file_bytes = _read_file_bytes(file_path)
                 checksum = _checksum_bytes(file_bytes)
                 if self._index.get(file_path) == checksum:
+                    files_skipped += 1
+                    rel_path = os.path.relpath(file_path, base_dir)
+                    skipped_list.append(rel_path)
+                    self.log.info(f"Skipped (unchanged): {rel_path}")
                     if self.event_bus:
                         await self.event_bus.publish({
                             "event": "ingest_file_skipped",
-                            "file": os.path.relpath(file_path, base_dir),
+                            "file": rel_path,
                             "reason": "unchanged",
                         })
                     continue  # unchanged
@@ -232,8 +250,8 @@ class Ingestor:
                                     "checksum": checksum,
                                     "has_text_layer": bool(page.get_text("text")),
                                     "vlm_correction_applied": bool(trigger_reason) and bool(text),
-                                    "vlm_provider": "openai" if (bool(trigger_reason) and bool(text)) else None,
-                                    "ocr_trigger_reason": trigger_reason,
+                                    "vlm_provider": "openai" if (bool(trigger_reason) and bool(text)) else "",
+                                    "ocr_trigger_reason": trigger_reason or "",
                                 }
                             )
 
@@ -250,9 +268,11 @@ class Ingestor:
                         chunks_upserted += len(per_page_chunks)
                         pages_processed += len(doc)
                         files_processed += 1
+                        processed_list.append(rel)
                         # Update index only after successful upsert
                         self._index[file_path] = checksum
                         self._save_index()
+                        self.log.info(f"Processed: {rel} — {len(per_page_chunks)} chunks, {len(doc)} pages")
                         if self.ingest_logger:
                             self.ingest_logger.append({
                                 "event": "ingest_file_done",
@@ -292,6 +312,7 @@ class Ingestor:
                 "errors": len(errors),
                 "ocr_events": len(ocr_events),
             })
+        self.log.info(f"Ingest run complete: {files_processed} processed, {files_skipped} skipped, {len(errors)} errors")
         if self.event_bus:
             await self.event_bus.publish({
                 "event": "ingest_run_done",
@@ -308,4 +329,8 @@ class Ingestor:
             chunks_upserted=chunks_upserted,
             errors=errors,
             ocr_events=ocr_events,
+            files_skipped=files_skipped,
+            files_found=len(target_files),
+            skipped_list=skipped_list,
+            processed_list=processed_list,
         )

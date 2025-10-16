@@ -21,7 +21,22 @@ function Health() {
 
 function Documents() {
   const { data, isLoading, refetch } = useQuery({ queryKey: ['documents'], queryFn: () => apiGet<any>('/documents') })
+  const [lastIngest, setLastIngest] = useState<any>(null)
+  const [isIngesting, setIsIngesting] = useState(false)
+  const [polledLogs, setPolledLogs] = useState<any[]>([])
   const { events, status } = useEventSource<any>('/events/ingest')
+
+  // Fallback polling: poll /logs/ingest every 2s while ingesting
+  useEffect(() => {
+    if (!isIngesting) return
+    const interval = setInterval(async () => {
+      try {
+        const logs = await apiGet<any>('/logs/ingest?limit=50')
+        setPolledLogs(logs.items || [])
+      } catch {}
+    }, 2000)
+    return () => clearInterval(interval)
+  }, [isIngesting])
   // Derive simple activity summary from events
   const summary = (() => {
     const state: any = { running: false, totalFiles: 0, processedFiles: 0, current: new Set<string>(), done: [] as any[] }
@@ -66,17 +81,57 @@ function Documents() {
         <Title order={3}>Documents</Title>
         <Group>
           <Button variant="light" onClick={() => refetch()}>Refresh</Button>
-          <Button onClick={async () => { await apiPost('/ingest', {}); await refetch() }}>Ingest</Button>
+          <Button onClick={async () => {
+            setIsIngesting(true)
+            const result = await apiPost('/ingest', {})
+            setLastIngest(result)
+            setIsIngesting(false)
+            await refetch()
+          }}>Ingest</Button>
+          <Button color="orange" onClick={async () => {
+            setIsIngesting(true)
+            const result = await apiPost('/ingest?force=true', {})
+            setLastIngest(result)
+            setIsIngesting(false)
+            await refetch()
+          }}>Force Re-Ingest</Button>
         </Group>
       </Group>
       {isLoading ? <Loader /> : <pre>{JSON.stringify(data, null, 2)}</pre>}
       <Space h="md" />
+      {lastIngest && (
+        <>
+          <Title order={4}>Last Ingest Summary</Title>
+          <Group gap="md">
+            <Text>Found: <b>{lastIngest.files_found}</b></Text>
+            <Text>Processed: <b>{lastIngest.files_processed}</b></Text>
+            <Text>Skipped: <b>{lastIngest.files_skipped}</b></Text>
+            <Text>Chunks: <b>{lastIngest.chunks_upserted}</b></Text>
+            <Text>Errors: <b>{lastIngest.errors?.length || 0}</b></Text>
+          </Group>
+          {lastIngest.processed_list?.length > 0 && (
+            <div>
+              <Text size="sm" fw={600}>Processed Files:</Text>
+              <ul>{lastIngest.processed_list.map((f: string) => <li key={f}><Code size="xs">{f}</Code></li>)}</ul>
+            </div>
+          )}
+          {lastIngest.skipped_list?.length > 0 && (
+            <div>
+              <Text size="sm" fw={600}>Skipped Files (unchanged):</Text>
+              <ul>{lastIngest.skipped_list.map((f: string) => <li key={f}><Code size="xs">{f}</Code></li>)}</ul>
+            </div>
+          )}
+          <Space h="md" />
+        </>
+      )}
+      <Space h="md" />
       <Title order={4}>Ingest Activity</Title>
-      <Text size="sm" c="dimmed">Live events from /events/ingest</Text>
+      <Text size="sm" c="dimmed">Live events from /events/ingest {isIngesting && status !== 'open' && '(using fallback polling)'}</Text>
       <Group gap="lg">
-        <Text>Running: <b>{summary.running ? 'Yes' : 'No'}</b></Text>
+        <Text>Running: <b>{summary.running || isIngesting ? 'Yes' : 'No'}</b></Text>
         <Text>Files: <b>{summary.processedFiles}/{summary.totalFiles}</b></Text>
-        <Text>Status: <b>{status}</b></Text>
+        <Text>SSE Status: <b>{status}</b></Text>
+        {isIngesting && status !== 'open' && <Text c="orange">Fallback: <b>Polling</b></Text>}
       </Group>
       <Space h="xs" />
       <Group align="flex-start" grow>

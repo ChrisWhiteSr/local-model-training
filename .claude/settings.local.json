@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile:*)",
+      "Bash(cat:*)",
+      "Bash(findstr:*)",
+      "Bash(netstat:*)",
+      "Bash(Get-Content logsingest.jsonl)",
+      "Bash(Select-Object -Last 20)",
+      "Bash(Get-Content logsquery.jsonl)",
+      "Bash(Select-Object -Last 10)",
+      "Bash(Invoke-RestMethod http://127.0.0.1:8000/documents)",
+      "Bash(curl -s http://127.0.0.1:8000/documents)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
