@@ -1,0 +1,65 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.parcel-cache/
+.next/
+.nuxt/
+.vite/
+*.tsbuildinfo
+
+# Data & models
+data/
+chroma/
+.chroma/
+models/
+checkpoints/
+experiments/
+outputs/
+logs/
+*.log
+
+# ML artifacts
+*.pt
+*.bin
+*.ckpt
+*.onnx
+*.h5
+
+# Databases / caches
+*.db
+*.sqlite
+*.sqlite3
+
+# Misc
+*.swp
+*.swo
+*.tmp
+*.bak
